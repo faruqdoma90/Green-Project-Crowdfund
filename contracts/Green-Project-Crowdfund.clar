@@ -89,13 +89,19 @@
 
 ;; Project Rating System Maps
 (define-map ratings-by-project-user
-    { project-id: uint, user: principal }
+    {
+        project-id: uint,
+        user: principal,
+    }
     { rating: uint }
 )
 
 (define-map rating-stats-by-project
     { project-id: uint }
-    { total: uint, sum: uint }
+    {
+        total: uint,
+        sum: uint,
+    }
 )
 (define-read-only (get-project (project-id uint))
     (map-get? projects { project-id: project-id })
@@ -503,26 +509,41 @@
     )
 )
 
-(define-read-only (is-contributor (project-id uint) (user principal))
+(define-read-only (is-contributor
+        (project-id uint)
+        (user principal)
+    )
     (is-some (get-contributor-total project-id user))
 )
 
-(define-read-only (get-user-rating (project-id uint) (user principal))
-    (get rating (map-get? ratings-by-project-user { project-id: project-id, user: user }))
+(define-read-only (get-user-rating
+        (project-id uint)
+        (user principal)
+    )
+    (get rating
+        (map-get? ratings-by-project-user {
+            project-id: project-id,
+            user: user,
+        })
+    )
 )
 
 (define-read-only (get-project-rating (project-id uint))
-    (ok (default-to { total: u0, sum: u0 }
+    (ok (default-to {
+        total: u0,
+        sum: u0,
+    }
         (map-get? rating-stats-by-project { project-id: project-id })
     ))
 )
 
 (define-read-only (get-project-average-rating (project-id uint))
-    (let (
-        (stats (default-to { total: u0, sum: u0 }
+    (let ((stats (default-to {
+            total: u0,
+            sum: u0,
+        }
             (map-get? rating-stats-by-project { project-id: project-id })
-        ))
-    )
+        )))
         (if (> (get total stats) u0)
             (ok (/ (* (get sum stats) u100) (get total stats)))
             err-not-found
@@ -530,41 +551,87 @@
     )
 )
 
-(define-public (rate-project (project-id uint) (rating uint))
-    (let (
-        (project (unwrap! (get-project project-id) err-not-found))
-        (existing-rating (get-user-rating project-id tx-sender))
-        (current-stats (default-to { total: u0, sum: u0 }
-            (map-get? rating-stats-by-project { project-id: project-id })
-        ))
+(define-read-only (get-project-insights (project-id uint))
+    (match (get-project project-id)
+        project (let (
+                (contributors (default-to { contributor-count: u0 }
+                    (get-project-contributors project-id)
+                ))
+                (milestones-data (get-project-milestones project-id))
+                (rating-stats (default-to {
+                    total: u0,
+                    sum: u0,
+                }
+                    (map-get? rating-stats-by-project { project-id: project-id })
+                ))
+                (milestone-count (match milestones-data
+                    data (len (get milestone-ids data))
+                    u0
+                ))
+                (average (if (> (get total rating-stats) u0)
+                    (/ (* (get sum rating-stats) u100) (get total rating-stats))
+                    u0
+                ))
+            )
+            (some {
+                project-id: project-id,
+                title: (get title project),
+                category: (get category project),
+                goal: (get goal-amount project),
+                raised: (get raised-amount project),
+                is-active: (get is-active project),
+                is-funded: (is-project-funded project-id),
+                is-complete: (is-project-complete project-id),
+                contributors: (get contributor-count contributors),
+                milestones: milestone-count,
+                rating-total: (get total rating-stats),
+                rating-sum: (get sum rating-stats),
+                rating-average: average,
+            })
+        )
+        none
     )
+)
+
+(define-public (rate-project
+        (project-id uint)
+        (rating uint)
+    )
+    (let (
+            (project (unwrap! (get-project project-id) err-not-found))
+            (existing-rating (get-user-rating project-id tx-sender))
+            (current-stats (default-to {
+                total: u0,
+                sum: u0,
+            }
+                (map-get? rating-stats-by-project { project-id: project-id })
+            ))
+        )
         ;; Validate rating is between 1 and 5
         (asserts! (and (>= rating u1) (<= rating u5)) err-invalid-rating)
-        
+
         ;; Validate user is a contributor
         (asserts! (is-contributor project-id tx-sender) err-not-contributor)
-        
+
         ;; Validate project is complete (goal met AND claimed)
         (asserts! (is-project-complete project-id) err-project-not-complete)
-        
+
         ;; Validate user hasn't already rated
         (asserts! (is-none existing-rating) err-already-rated)
-        
+
         ;; Store the rating
-        (map-set ratings-by-project-user
-            { project-id: project-id, user: tx-sender }
-            { rating: rating }
+        (map-set ratings-by-project-user {
+            project-id: project-id,
+            user: tx-sender,
+        } { rating: rating }
         )
-        
+
         ;; Update project stats
-        (map-set rating-stats-by-project
-            { project-id: project-id }
-            {
-                total: (+ (get total current-stats) u1),
-                sum: (+ (get sum current-stats) rating)
-            }
-        )
-        
+        (map-set rating-stats-by-project { project-id: project-id } {
+            total: (+ (get total current-stats) u1),
+            sum: (+ (get sum current-stats) rating),
+        })
+
         (ok true)
     )
 )
